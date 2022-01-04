@@ -33,7 +33,7 @@ from dummyserver.server import (
 )
 from dummyserver.testcase import HTTPSDummyServerTestCase
 from urllib3 import HTTPSConnectionPool, PoolManager
-from urllib3.connection import RECENT_DATE, CertificateError, VerifiedHTTPSConnection
+from urllib3.connection import RECENT_DATE, VerifiedHTTPSConnection
 from urllib3.exceptions import (
     ConnectTimeoutError,
     InsecureRequestWarning,
@@ -42,6 +42,7 @@ from urllib3.exceptions import (
     SSLError,
     SystemTimeWarning,
 )
+from urllib3.util.ssl_match_hostname import CertificateError
 from urllib3.util.timeout import Timeout
 
 from .. import has_alpn
@@ -1008,11 +1009,7 @@ class TestHTTPS_Hostname:
                 no_san_server.port,
                 cert_reqs="CERT_REQUIRED",
                 ssl_context=ctx,
-                **(
-                    {"assert_hostname": no_san_server.host}
-                    if use_assert_hostname
-                    else {}
-                ),
+                assert_hostname=no_san_server.host if use_assert_hostname else None,
             ) as https_pool:
                 https_pool.request("GET", "/")
         except MaxRetryError as e:

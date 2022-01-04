@@ -97,6 +97,7 @@ if TYPE_CHECKING:
     class _TYPE_PEER_CERT_RET_DICT(TypedDict, total=False):
         subjectAltName: Tuple[Tuple[str, str], ...]
         subject: Tuple[Tuple[Tuple[str, str], ...], ...]
+        serialNumber: str
 
 
 # Mapping from 'ssl.PROTOCOL_TLSX' to 'TLSVersion.X'
