@@ -221,6 +221,19 @@ class BaseHTTPResponse(io.IOBase):
         if "chunked" in encodings:
             self.chunked = True
 
+        # Find the advertised length of the HTTP response body.
+        self.length: Optional[int] = None
+        if not self.chunked:
+            length: Optional[str] = self.headers.get("content-length")
+            if length:
+                try:
+                    self.length = int(length)
+                except ValueError:
+                    pass
+                else:
+                    if self.length < 0:  # Ignore negative Content-Length values.
+                        self.length = None
+
         self._decoder: Optional[ContentDecoder] = None
 
     def get_redirect_location(self) -> Union[Optional[str], "Literal[False]"]:
@@ -262,6 +275,10 @@ class BaseHTTPResponse(io.IOBase):
 
     @property
     def connection(self) -> Optional[HTTPConnection]:
+        raise NotImplementedError()
+
+    @property
+    def http_version(self) -> str:
         raise NotImplementedError()
 
     def stream(
@@ -498,6 +515,10 @@ class HTTPResponse(BaseHTTPResponse):
     @property
     def connection(self) -> Optional[HTTPConnection]:
         return self._connection
+
+    @property
+    def http_version(self) -> str:
+        return getattr(self._connection, "_http_vsn_str", "HTTP/1.1")
 
     def isclosed(self) -> bool:
         return is_fp_closed(self._fp)

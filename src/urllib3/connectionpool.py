@@ -3,7 +3,6 @@ import logging
 import queue
 import sys
 import warnings
-from http.client import HTTPResponse as _HttplibHTTPResponse
 from socket import timeout as SocketTimeout
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Type, TypeVar, Union, overload
@@ -11,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Type, TypeVar, Union, 
 from ._request_methods import RequestMethods
 from .connection import (
     _TYPE_BODY,
+    BaseHTTPConnection,
     BaseSSLError,
     BrokenPipeError,
     DummyConnection,
@@ -38,7 +38,7 @@ from .exceptions import (
     SSLError,
     TimeoutError,
 )
-from .response import BaseHTTPResponse, HTTPResponse
+from .response import BaseHTTPResponse
 from .util.connection import is_connection_dropped
 from .util.proxy import connection_requires_http_tunnel
 from .util.request import _TYPE_BODY_POSITION, set_file_position
@@ -166,8 +166,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     """
 
     scheme = "http"
-    ConnectionCls: Type[Union[HTTPConnection, HTTPSConnection]] = HTTPConnection
-    ResponseCls = HTTPResponse
+    ConnectionCls: Type[BaseHTTPConnection] = HTTPConnection
 
     def __init__(
         self,
@@ -375,8 +374,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         url: str,
         timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
         chunked: bool = False,
+        retries: Retry = None,
+        release_conn: bool = False,
+        preload_content: bool = False,
+        decode_content: bool = False,
         **httplib_request_kw: Any,
-    ) -> _HttplibHTTPResponse:
+    ) -> BaseHTTPResponse:
         """
         Perform a request on a given urllib connection object taken from our
         pool.
@@ -459,9 +462,22 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 )
             conn.sock.settimeout(read_timeout)
 
+        # If we're going to release the connection in ``finally:``, then
+        # the response doesn't need to know about the connection. Otherwise
+        # it will also try to release it and we'll have a double-release
+        # mess.
+        response_conn = conn if not release_conn else None
+
         # Receive the response from the server
         try:
-            httplib_response = conn.getresponse()
+            http_response = conn.getresponse(
+                pool=self,
+                connection=response_conn,
+                retries=retries,
+                request_method=method,
+                preload_content=preload_content,
+                decode_content=decode_content,
+            )
         except (BaseSSLError, OSError) as e:
             self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
             raise
@@ -473,14 +489,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self.port,
             method,
             url,
-            # HTTP version
-            conn._http_vsn_str,  # type: ignore[attr-defined]
-            httplib_response.status,
-            httplib_response.length,
+            http_response.http_version,
+            http_response.status,
+            http_response.length,
         )
 
         try:
-            assert_header_parsing(httplib_response.msg)
+            assert_header_parsing(http_response.headers)
         except (HeaderParsingError, TypeError) as hpe:
             log.warning(
                 "Failed to parse headers (url=%s): %s",
@@ -489,7 +504,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 exc_info=True,
             )
 
-        return httplib_response
+        return http_response
 
     def _absolute_url(self, path: str) -> str:
         return Url(scheme=self.scheme, host=self.host, port=self.port, path=path).url
@@ -548,6 +563,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         release_conn: Optional[bool] = None,
         chunked: bool = False,
         body_pos: Optional[_TYPE_BODY_POSITION] = None,
+        preload_content: bool = True,
+        decode_content: bool = True,
         **response_kw: Any,
     ) -> BaseHTTPResponse:
         """
@@ -653,7 +670,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             retries = Retry.from_int(retries, redirect=redirect, default=self.retries)
 
         if release_conn is None:
-            release_conn = response_kw.get("preload_content", True)
+            release_conn = preload_content
 
         # Check host
         if assert_same_host and not self.is_same_host(url):
@@ -723,8 +740,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                         )
                         raise
 
-            # Make the request on the httplib connection object.
-            httplib_response = self._make_request(
+            response_kw.pop("request_url", None)
+
+            # Make the request with the HTTPConnection object.
+            response = self._make_request(
                 conn,
                 method,
                 url,
@@ -732,23 +751,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 body=body,
                 headers=headers,
                 chunked=chunked,
-            )
-
-            # If we're going to release the connection in ``finally:``, then
-            # the response doesn't need to know about the connection. Otherwise
-            # it will also try to release it and we'll have a double-release
-            # mess.
-            response_conn = conn if not release_conn else None
-
-            # Pass method to Response for length checking
-            response_kw["request_method"] = method
-
-            # Import httplib's response into our own wrapper object
-            response = self.ResponseCls.from_httplib(
-                httplib_response,
-                pool=self,
-                connection=response_conn,
                 retries=retries,
+                release_conn=release_conn,
+                preload_content=preload_content,
+                decode_content=decode_content,
                 **response_kw,
             )
 

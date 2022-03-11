@@ -1,6 +1,7 @@
 import http.client as httplib
 from email.errors import MultipartInvariantViolationDefect, StartBoundaryNotFoundDefect
 
+from .._collections import HTTPHeaderDict
 from ..exceptions import HeaderParsingError
 
 
@@ -35,14 +36,12 @@ def is_fp_closed(obj: object) -> bool:
     raise ValueError("Unable to determine whether fp is closed.")
 
 
-def assert_header_parsing(headers: httplib.HTTPMessage) -> None:
+def assert_header_parsing(headers: HTTPHeaderDict) -> None:
     """
     Asserts whether all headers have been successfully parsed.
     Extracts encountered errors from the result of parsing headers.
 
-    Only works on Python 3.
-
-    :param http.client.HTTPMessage headers: Headers to verify.
+    :param urllib3.HTTPHeaderDict headers: Headers to verify.
 
     :raises urllib3.exceptions.HeaderParsingError:
         If parsing errors are found.

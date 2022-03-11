@@ -22,8 +22,12 @@ from typing import (
     cast,
 )
 
+from ._collections import HTTPHeaderDict
+
 if TYPE_CHECKING:
     from typing_extensions import Literal
+
+    from .response import BaseHTTPResponse, HTTPResponse
 
     from .util.ssl_ import _TYPE_PEER_CERT_RET_DICT
     from .util.ssltransport import SSLTransport
@@ -83,6 +87,65 @@ _TYPE_BODY = Union[bytes, IO[Any], Iterable[bytes], str]
 class ProxyConfig(NamedTuple):
     ssl_context: Optional["ssl.SSLContext"]
     use_forwarding_for_https: bool
+
+
+class BaseHTTPConnection:
+    default_port: int = port_by_scheme["http"]
+
+    #: Disable Nagle's algorithm by default.
+    #: ``[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]``
+    default_socket_options: connection._TYPE_SOCKET_OPTIONS = [
+        (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    ]
+
+    #: Whether this connection verifies the host's certificate.
+    is_verified: bool = False
+
+    #: Whether this proxy connection (if used) verifies the proxy host's
+    #: certificate. If no HTTPS proxy is being used will be ``None``.
+    proxy_is_verified: Optional[bool] = None
+
+    source_address: Optional[Tuple[str, int]]
+    socket_options: Optional[connection._TYPE_SOCKET_OPTIONS]
+
+    host: str
+    proxy: Optional[str]
+    proxy_config: Optional[ProxyConfig]
+
+    def __init__(
+        host: str,
+        port: Optional[int] = None,
+        timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
+        source_address: Optional[Tuple[str, int]] = None,
+        blocksize: int = 8192,
+        socket_options: Optional[
+            connection._TYPE_SOCKET_OPTIONS
+        ] = default_socket_options,
+        proxy: Optional[str] = None,
+        proxy_config: Optional[ProxyConfig] = None,
+    ) -> None:
+        ...
+
+    def connect(self) -> None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+    # `request` method's signature intentionally violates LSP.
+    # urllib3's API is different from `http.client.HTTPConnection` and the subclassing is only incidental.
+    def request(  # type: ignore[override]
+        self,
+        method: str,
+        url: str,
+        body: Optional[_TYPE_BODY] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        chunked: bool = False,
+    ) -> None:
+        ...
+
+    def getresponse(self) -> "BaseHTTPResponse":
+        ...
 
 
 class HTTPConnection(_HTTPConnection):
@@ -351,6 +414,20 @@ class HTTPConnection(_HTTPConnection):
 
         # After the if clause, to always have a closed body
         self.send(b"0\r\n\r\n")
+
+    def getresponse(self, **response_kw) -> "HTTPResponse":
+        from .response import HTTPResponse
+
+        httplib_response = super().getresponse()
+        return HTTPResponse(
+            body=httplib_response,
+            headers=HTTPHeaderDict(httplib_response.msg.items()),
+            status=httplib_response.status,
+            version=httplib_response.version,
+            reason=httplib_response.reason,
+            original_response=httplib_response,
+            **response_kw,
+        )
 
 
 class HTTPSConnection(HTTPConnection):

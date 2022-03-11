@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from dummyserver.server import DEFAULT_CA
+from urllib3 import HTTPHeaderDict
 from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import (
     HTTPConnectionPool,
@@ -510,14 +511,18 @@ class TestConnectionPool:
                 super().__init__()
                 self._ex: Optional[Type[BaseException]] = ex
 
-            def __call__(self, *args: Any, **kwargs: Any) -> httplib.HTTPResponse:
+            def __call__(self, *args: Any, **kwargs: Any) -> HTTPResponse:
                 if self._ex:
                     ex, self._ex = self._ex, None
                     raise ex()
                 response = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
                 response.fp = MockChunkedEncodingResponse([b"f", b"o", b"o"])  # type: ignore[assignment]
-                response.headers = response.msg = httplib.HTTPMessage()
-                return response
+                return HTTPResponse(
+                    body=response,
+                    headers=HTTPHeaderDict(),
+                    status=200,
+                    reason=""
+                )
 
         def _test(exception: Type[BaseException]) -> None:
             with HTTPConnectionPool(host="localhost", maxsize=1, block=True) as pool:
@@ -557,22 +562,3 @@ class TestConnectionPool:
                 timeout = Timeout(1, 1, 1)
                 with pytest.raises(ReadTimeoutError):
                     pool._make_request(conn, "", "", timeout)
-
-    def test_custom_http_response_class(self) -> None:
-        class CustomHTTPResponse(HTTPResponse):
-            pass
-
-        class CustomConnectionPool(HTTPConnectionPool):
-            ResponseCls = CustomHTTPResponse
-
-            def _make_request(self, *args: Any, **kwargs: Any) -> httplib.HTTPResponse:
-                httplib_response = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-                httplib_response.fp = MockChunkedEncodingResponse([b"f", b"o", b"o"])  # type: ignore[assignment]
-                httplib_response.headers = httplib_response.msg = httplib.HTTPMessage()
-                return httplib_response
-
-        with CustomConnectionPool(host="localhost", maxsize=1, block=True) as pool:
-            response = pool.request(
-                "GET", "/", retries=False, chunked=True, preload_content=False
-            )
-            assert isinstance(response, CustomHTTPResponse)
